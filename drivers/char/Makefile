@@ -70,4 +70,6 @@ obj-$(CONFIG_JS_RTC)		+= js-rtc.o
 js-rtc-y = rtc.o
 
 obj-$(CONFIG_TILE_SROM)		+= tile-srom.o
-obj-$(CONFIG_FRANDOM)	+= frandom.o
+
+snd-soc-smartpa-objs 		:= smartpa.o
+obj-$(CONFIG_SND_SOC_NXP_SMARTPA)    += snd-soc-smartpa.o

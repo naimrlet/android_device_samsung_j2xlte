@@ -2960,7 +2960,7 @@ static void sd_probe_async(void *data, async_cookie_t cookie)
 		gd->flags |= GENHD_FL_IF_USB;
 	msleep(500);
 #endif
-
+	blk_pm_runtime_init(sdp->request_queue, dev);
 	add_disk(gd);
 #ifdef CONFIG_USB_STORAGE_DETECT
 	sdkp->prv_media_present = sdkp->media_present;
@@ -3233,8 +3233,8 @@ static int sd_suspend(struct device *dev)
 	struct scsi_disk *sdkp = scsi_disk_get_from_dev(dev);
 	int ret = 0;
 
-	if (!sdkp)	/* E.g.: runtime suspend following sd_remove() */
-		return 0;
+	if (!sdkp)
+		return 0;	/* this can happen */
 
 	if (sdkp->WCE) {
 		sd_printk(KERN_NOTICE, sdkp, "Synchronizing SCSI cache\n");
@@ -3257,9 +3257,6 @@ static int sd_resume(struct device *dev)
 {
 	struct scsi_disk *sdkp = scsi_disk_get_from_dev(dev);
 	int ret = 0;
-
-	if (!sdkp)	/* E.g.: runtime resume at the start of sd_probe() */
-		return 0;
 
 	if (!sdkp->device->manage_start_stop)
 		goto done;

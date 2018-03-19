@@ -356,16 +356,15 @@ struct dcam_frame {
 	uint32_t               vaddr;
 	struct dcam_frame      *prev;
 	struct dcam_frame      *next;
+	uint32_t               zsl_private;
 };
 
 struct dcam_get_path_id {
 	uint32_t               fourcc;
 	uint32_t               is_path_work[DCAM_PATH_MAX];
 	uint32_t               need_isp_tool;
-#ifdef CONFIG_MACH_GRANDPRIMEVE3G
 	uint32_t               need_isp;
 	uint32_t               need_shrink;
-#endif
 	struct dcam_size       input_size;
 	struct dcam_rect       input_trim;
 	struct dcam_size       output_size;

@@ -35,6 +35,7 @@
  * ENXIO  : 6 (No such device or address)
  * EINVAL : 22 (Invalid argument)
  *****************************************************************************/
+extern struct ist30xx_data *ts_data;
 
 int ist30xx_cmd_gesture(struct i2c_client *client, int value)
 {
@@ -87,10 +88,11 @@ int ist30xx_cmd_check_calib(struct i2c_client *client)
 
 int ist30xx_cmd_hold(struct i2c_client *client, int enable)
 {
+	if (!ts_data->initialized && (ts_data->status.update != 1))
+		return 0;
+		
 	int ret = ist30xx_write_cmd(client,
 			IST30XX_HIB_CMD, (eHCOM_FW_HOLD << 16) | (enable & 0xFFFF));
-
-	msleep(40);
 
 	if (enable)
 		ist30xx_tracking(TRACK_CMD_ENTER_REG);
@@ -271,30 +273,6 @@ int ist30xx_read_cmd(struct ist30xx_data *data, u32 cmd, u32 *buf)
 	return ret;
 }
 
-int ist30xx_write_reg(struct i2c_client *client, u32 cmd, u32 val)
-{
-	int ret;
-
-	struct i2c_msg msg;
-	u8 msg_buf[IST30XX_ADDR_LEN + IST30XX_DATA_LEN];
-
-	put_unaligned_be32(cmd, msg_buf);
-	put_unaligned_be32(val, msg_buf + IST30XX_ADDR_LEN);
-
-	msg.addr = client->addr;
-	msg.flags = 0;
-	msg.len = IST30XX_ADDR_LEN + IST30XX_DATA_LEN;
-	msg.buf = msg_buf;
-
-	ret = i2c_transfer(client->adapter, &msg, WRITE_CMD_MSG_LEN);
-	if (ret != WRITE_CMD_MSG_LEN) {
-		tsp_err("%s: i2c failed (%d), cmd: %x(%x)\n", __func__, ret, cmd, val);
-		return -EIO;
-	}
-
-	return 0;
-}
-
 int ist30xx_write_cmd(struct i2c_client *client, u32 cmd, u32 val)
 {
 	int ret;
@@ -316,7 +294,8 @@ int ist30xx_write_cmd(struct i2c_client *client, u32 cmd, u32 val)
 		return -EIO;
 	}
 
-	msleep(40);
+	if ((ts_data->initialized || (ts_data->status.update == 1)) && !ts_data->ignore_delay)
+		msleep(40);
 
 	return 0;
 }
@@ -403,13 +382,13 @@ static void ts_power_enable(struct ist30xx_data *data, int en)
 		}
 	}
 
-	if (en) {
-		if (data->status.power)
+	if (en){
+		if(data->status.power)
 			tsp_info("%s : already enabled\n", __func__);
 		else
 			ret = regulator_enable(touch_regulator);
 	} else {
-		if (data->status.power)
+		if(data->status.power)
 			ret = regulator_disable(touch_regulator);
 		else
 			tsp_info("%s : already disabled\n", __func__);

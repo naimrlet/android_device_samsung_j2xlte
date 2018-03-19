@@ -24,6 +24,7 @@
 #include <linux/pci.h>
 #include <linux/slab.h>
 #include <linux/dmapool.h>
+#include <linux/dma-mapping.h>
 
 #include "xhci.h"
 
@@ -318,6 +319,23 @@ static void xhci_reinit_cached_ring(struct xhci_hcd *xhci,
 	 * but just in case...
 	 */
 	INIT_LIST_HEAD(&ring->td_list);
+}
+
+/* Zero an endpoint ring (except for link TRBs clear only cycle bit) and move
+ * the enqueue and dequeue pointers to the beginning of the ring.
+ */
+void xhci_reinit_xfer_ring(struct xhci_ring *ring, unsigned int cycle_state)
+{
+	struct xhci_segment	*seg = ring->first_seg;
+
+	do {
+		memset(seg->trbs, 0,
+				sizeof(union xhci_trb)*(TRBS_PER_SEGMENT - 1));
+		seg->trbs[TRBS_PER_SEGMENT - 1].link.control &= ~TRB_CYCLE;
+		seg = seg->next;
+	} while (seg != ring->first_seg);
+
+	xhci_initialize_ring_info(ring, cycle_state);
 }
 
 /*
@@ -1400,10 +1418,10 @@ int xhci_endpoint_init(struct xhci_hcd *xhci,
 		/* Attempt to use the ring cache */
 		if (virt_dev->num_rings_cached == 0)
 			return -ENOMEM;
-		virt_dev->num_rings_cached--;
 		virt_dev->eps[ep_index].new_ring =
 			virt_dev->ring_cache[virt_dev->num_rings_cached];
 		virt_dev->ring_cache[virt_dev->num_rings_cached] = NULL;
+		virt_dev->num_rings_cached--;
 		xhci_reinit_cached_ring(xhci, virt_dev->eps[ep_index].new_ring,
 					1, type);
 	}
@@ -1473,10 +1491,10 @@ int xhci_endpoint_init(struct xhci_hcd *xhci,
 	 * use Event Data TRBs, and we don't chain in a link TRB on short
 	 * transfers, we're basically dividing by 1.
 	 *
-	 * xHCI 1.0 and 1.1 specification indicates that the Average TRB Length
-	 * should be set to 8 for control endpoints.
+	 * xHCI 1.0 specification indicates that the Average TRB Length should
+	 * be set to 8 for control endpoints.
 	 */
-	if (usb_endpoint_xfer_control(&ep->desc) && xhci->hci_version >= 0x100)
+	if (usb_endpoint_xfer_control(&ep->desc) && xhci->hci_version == 0x100)
 		ep_ctx->tx_info |= cpu_to_le32(AVG_TRB_LENGTH_FOR_EP(8));
 	else
 		ep_ctx->tx_info |=
@@ -1795,7 +1813,7 @@ void xhci_mem_cleanup(struct xhci_hcd *xhci)
 	}
 
 	num_ports = HCS_MAX_PORTS(xhci->hcs_params1);
-	for (i = 0; i < num_ports && xhci->rh_bw; i++) {
+	for (i = 0; i < num_ports; i++) {
 		struct xhci_interval_bw_table *bwt = &xhci->rh_bw[i].bw_table;
 		for (j = 0; j < XHCI_MAX_INTERVAL; j++) {
 			struct list_head *ep = &bwt->interval_bw[j].endpoints;
@@ -1860,11 +1878,6 @@ no_bw:
 	kfree(xhci->usb3_ports);
 	kfree(xhci->port_array);
 	kfree(xhci->rh_bw);
-
-	xhci->usb2_ports = NULL;
-	xhci->usb3_ports = NULL;
-	xhci->port_array = NULL;
-	xhci->rh_bw = NULL;
 
 	xhci->page_size = 0;
 	xhci->page_shift = 0;

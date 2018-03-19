@@ -8,6 +8,25 @@ config ANDROID
 
 if ANDROID
 
+config ANDROID_BINDER_IPC
+	bool "Android Binder IPC Driver"
+	default n
+	---help---
+	  Binder is used in Android for both communication between processes,
+	  and remote method invocation.
+
+	  This means one Android process can call a method/routine in another
+	  Android process, using Binder to identify, invoke and pass arguments
+	  between said processes.
+
+config ANDROID_BINDER_IPC_32BIT
+	bool
+        default y
+	depends on !64BIT && ANDROID_BINDER_IPC
+	---help---
+	  Enable to support an old 32-bit Android user-space. Breaks the new
+	  Android user-space.
+
 config ASHMEM
 	bool "Enable the Anonymous Shared Memory Subsystem"
 	default n
@@ -84,14 +103,6 @@ config SEC_DEBUG_LMK_MEMINFO
 	help
 	  Show memory information when lmk kills process
 
-config ANDROID_LMK_ADJ_RBTREE
-	bool "Use RBTREE for Android Low Memory Killer"
-	depends on ANDROID_LOW_MEMORY_KILLER
-	default N
-	---help---
-	    Use oom_score_adj rbtree to select the best proecss to kill
-	    when system in low memory status.
-
 config ANDROID_INTF_ALARM_DEV
 	bool "Android alarm driver"
 	depends on RTC_CLASS
@@ -138,6 +149,20 @@ config RUNTIME_COMPCACHE
         default n
         help
           This option enables rtcc v3 for android
+
+config POMEMR_RECLAIM
+	bool "page order mem reclaim"
+	depends on ANDROID
+	default n
+	help
+	  This option enables page order memory reclaim
+
+config POMEMR_RECLAIM_FILE
+	bool "page order mem reclaim for file pages"
+	depends on ANDROID && POMEMR_RECLAIM
+	default n
+	help
+	  This option enables page order memory reclaim for file pages
 
 config KSWAPD_NOSWAP
         bool "Disable swap in kswapd"
