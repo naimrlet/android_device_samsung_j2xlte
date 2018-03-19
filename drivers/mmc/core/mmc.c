@@ -23,12 +23,6 @@
 #include "mmc_ops.h"
 #include "sd_ops.h"
 
-#ifdef CONFIG_MMC_SUPPORT_STLOG
-#include <linux/stlog.h>
-#else
-#define ST_LOG(fmt,...)
-#endif
-
 static const unsigned int tran_exp[] = {
 	10000,		100000,		1000000,	10000000,
 	0,		0,		0,		0
@@ -61,6 +55,14 @@ static const unsigned int tacc_mant[] = {
 			__res |= resp[__off-1] << ((32 - __shft) % 32);	\
 		__res & __mask;						\
 	})
+
+#ifdef CONFIG_ASYNC_FSYNC
+static unsigned int perf_degr;
+int emmc_perf_degr(void)
+{
+	return perf_degr;
+}
+#endif
 
 /*
  * Given the decoded CSD structure, decode the raw CID to our CID structure.
@@ -307,6 +309,9 @@ static unsigned long long mmc_merge_ext_csd(u8 *ext_csd, bool continuous, int co
 	return merge_ext_csd;
 }
 
+/* Minimum partition switch timeout in milliseconds */
+#define MMC_MIN_PART_SWITCH_TIME	300
+
 /*
  * Decode extended CSD.
  */
@@ -368,6 +373,10 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 
 		/* EXT_CSD value is in units of 10ms, but we store in ms */
 		card->ext_csd.part_time = 10 * ext_csd[EXT_CSD_PART_SWITCH_TIME];
+		/* Some eMMC set the value too low so set a minimum */
+		if (card->ext_csd.part_time &&
+		    card->ext_csd.part_time < MMC_MIN_PART_SWITCH_TIME)
+			card->ext_csd.part_time = MMC_MIN_PART_SWITCH_TIME;
 
 		/* Sleep / awake timeout in 100ns units */
 		if (sa_shift > 0 && sa_shift <= 0x17)
@@ -1404,22 +1413,10 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 		}
 	}
 
-	/* if it is from resume. check bkops mode */
-	if (oldcard) {
-		if (oldcard->bkops_enable & 0xFE) {
-			/*
-			 * if bkops mode is enable before getting suspend.
-			 * turn on the bkops mode
-			 */
-			mmc_bkops_enable(oldcard->host, oldcard->bkops_enable);
-		}
-	}
-
-	if (!oldcard){
+	if (!oldcard)
 		host->card = card;
-		ST_LOG("<%s> %s: card init succeed\n", __func__,mmc_hostname(host));
-	}
-	//printk("%s: mmc_init_card success\n", mmc_hostname(host));
+	
+	printk("%s: mmc_init_card success\n", mmc_hostname(host));
 	mmc_free_ext_csd(ext_csd);
 	return 0;
 

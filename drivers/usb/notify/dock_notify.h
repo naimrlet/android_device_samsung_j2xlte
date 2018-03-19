@@ -10,6 +10,5 @@
 #define __LINUX_DOCK_NOTIFY_H__
 
 extern void register_usbdev_notify(void);
-extern void unregister_usbdev_notify(void);
 #endif
 

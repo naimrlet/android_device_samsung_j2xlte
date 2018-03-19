@@ -25,8 +25,6 @@
 extern int sbuf_init_debugfs( void *root );
 extern int smsg_init_debugfs( void *root );
 extern int sblock_init_debugfs( void *root );
-extern int seblock_init_debugfs( void *root );
-extern int sipx_init_debugfs( void *root );
 extern int smem_init_debugfs( void *root );
 
 static int __init sipc_init_debugfs( void)
@@ -38,10 +36,6 @@ static int __init sipc_init_debugfs( void)
 	smsg_init_debugfs(root);
 	sbuf_init_debugfs(root);
 	sblock_init_debugfs(root);
-	seblock_init_debugfs(root);
-#ifdef CONFIG_ZERO_COPY_SIPX
-        sipx_init_debugfs(root);
-#endif
 	smem_init_debugfs(root);
 	return 0;
 }

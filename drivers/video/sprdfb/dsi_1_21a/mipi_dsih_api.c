@@ -1623,7 +1623,6 @@ sprd Aoke added for power saving while suspend
 void mipi_dsih_ulps_mode(dsih_ctrl_t * instance, int en)
 {
 	mipi_dsih_dphy_ulps_data_lanes(&(instance->phy_instance),en);
-	ndelay(500);
 	mipi_dsih_dphy_ulps_clk_lane(&(instance->phy_instance),en);
 }
 /**

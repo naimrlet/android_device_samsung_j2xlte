@@ -22,13 +22,7 @@ obj-$(CONFIG_VIDEO_DEV) += v4l2-core/
 obj-$(CONFIG_VIDEO_DCAM_SPRD) += sprd_dcam/
 obj-$(CONFIG_VIDEO_DCAM_SPRD) += sprd_scale/
 obj-$(CONFIG_VIDEO_DCAM_SPRD) += sprd_rotation/
-ifeq ($(CONFIG_ADF),y)
-obj-$(CONFIG_VIDEO_GSP_SPRD)  += sprd_gsp_adf/
-obj-$(CONFIG_VIDEO_GSPN_SPRD)  += sprd_gspn_adf/
-else
 obj-$(CONFIG_VIDEO_GSP_SPRD)  += sprd_gsp/
-obj-$(CONFIG_VIDEO_GSPN_SPRD)  += sprd_gspn/
-endif
 obj-$(CONFIG_VIDEO_DCAM_SPRD) += sprd_sensor/
 obj-$(CONFIG_VIDEO_DCAM_SPRD) += sprd_isp/
 #obj-$(CONFIG_VIDEO_DCAM_SPRD) += sprd_dma_copy/
@@ -43,4 +37,4 @@ obj-y += rc/
 
 obj-y += common/ platform/ pci/ usb/ mmc/ firewire/ parport/
 obj-$(CONFIG_VIDEO_DEV) += radio/
-obj-y += radio/sprd2331/
+obj-$(CONFIG_MTV) += mtv/

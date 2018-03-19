@@ -969,7 +969,6 @@ static int sprdwl_probe(struct platform_device *pdev)
 		ret = -ENOMEM;
 		goto err_register_p2p_intf;
 	}
-	p2p_ndev->dev_id = 1; /*for CTS test ipv6 address conflict*/
 	priv->p2p_vif = netdev_priv(p2p_ndev);
 
 	ret = register_inetaddr_notifier(&sprdwl_inetaddr_cb);

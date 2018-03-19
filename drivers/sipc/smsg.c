@@ -34,57 +34,23 @@
 static struct smsg_ipc *smsg_ipcs[SIPC_ID_NR];
 
 static ushort debug_enable = 0;
-static ushort modem_shutdown = 0;
+
 static struct wake_lock sipc_wake_lock;
-static uint smsg_irq_cnt = 0;
 
 module_param_named(debug_enable, debug_enable, ushort, 0644);
 
-static int __init modem_init_status(char *str)
+irqreturn_t smsg_irq_handler(int irq, void *dev_id)
 {
-	pr_info("cmdline modem para: %s\n", str);
-	modem_shutdown = 1;
-	return 1;
-}
-__setup("modem=", modem_init_status);
-
-#ifndef CONFIG_SPRD_MAILBOX_FIFO
-void	smsg_clear_queue(struct smsg_ipc *ipc)
-{
-	if (modem_shutdown) {
-		writel(0, ipc->rxbuf_rdptr);
-		writel(0, ipc->rxbuf_wrptr);
-		writel(0, ipc->txbuf_rdptr);
-		writel(0, ipc->txbuf_wrptr);
-	}
-}
-#endif
-
-#ifdef CONFIG_SPRD_MAILBOX_FIFO
-irqreturn_t smsg_irq_handler(void* ptr, void *private)
-#else
-
-irqreturn_t smsg_irq_handler(int irq, void *private)
-#endif
-{
-	struct smsg_ipc *ipc = (struct smsg_ipc *)private;
+	struct smsg_ipc *ipc = (struct smsg_ipc *)dev_id;
 	struct smsg *msg;
 	struct smsg_channel *ch;
-#ifndef CONFIG_SPRD_MAILBOX_FIFO
-	size_t rxpos;
-#endif
+	uintptr_t rxpos;
 	uint32_t wr;
 
-#ifndef CONFIG_SPRD_MAILBOX
-	if (ipc->rxirq_status(ipc->id)) {
-		ipc->rxirq_clear(ipc->id);
+	if (ipc->rxirq_status()) {
+		ipc->rxirq_clear();
 	}
-#endif
 
-#ifdef CONFIG_SPRD_MAILBOX_FIFO
-	msg = ptr;
-	do{
-#else
 	while (readl(ipc->rxbuf_wrptr) != readl(ipc->rxbuf_rdptr)) {
 		rxpos = (readl(ipc->rxbuf_rdptr) & (ipc->rxbuf_size - 1)) *
 			sizeof (struct smsg) + ipc->rxbuf_addr;
@@ -92,17 +58,15 @@ irqreturn_t smsg_irq_handler(int irq, void *private)
 
 		pr_debug("irq get smsg: wrptr=%u, rdptr=%u, rxpos=0x%lx\n",
 			readl(ipc->rxbuf_wrptr), readl(ipc->rxbuf_rdptr), rxpos);
-#endif
-		pr_debug("irq read smsg: dst=%d, channel=%d, type=%d, flag=0x%04x, value=0x%08x\n",
-			ipc->dst,msg->channel, msg->type, msg->flag, msg->value);
+		pr_debug("irq read smsg: channel=%d, type=%d, flag=0x%04x, value=0x%08x\n",
+			msg->channel, msg->type, msg->flag, msg->value);
 		if(msg->type == SMSG_TYPE_DIE) {
 			if(debug_enable)
 				panic("cpcrash");
 			else {
-#ifndef CONFIG_SPRD_MAILBOX_FIFO
 				/* update smsg rdptr */
 				writel(readl(ipc->rxbuf_rdptr) + 1, ipc->rxbuf_rdptr);
-#endif
+
 				continue;
 			}
 		}
@@ -111,10 +75,9 @@ irqreturn_t smsg_irq_handler(int irq, void *private)
 			printk(KERN_ERR "invalid smsg: channel=%d, type=%d, flag=0x%04x, value=0x%08x\n",
 				msg->channel, msg->type, msg->flag, msg->value);
 
-#ifndef CONFIG_SPRD_MAILBOX_FIFO
 			/* update smsg rdptr */
 			writel(readl(ipc->rxbuf_rdptr) + 1, ipc->rxbuf_rdptr);
-#endif
+
 			continue;
 		}
 
@@ -131,10 +94,9 @@ irqreturn_t smsg_irq_handler(int irq, void *private)
 					"drop smsg: type=%d, flag=0x%04x, value=0x%08x\n",
 					msg->channel, msg->type, msg->flag, msg->value);
 			}
-#ifndef CONFIG_SPRD_MAILBOX_FIFO
 			/* update smsg rdptr */
 			writel(readl(ipc->rxbuf_rdptr) + 1, ipc->rxbuf_rdptr);
-#endif
+
 			continue;
 		}
 
@@ -151,21 +113,16 @@ irqreturn_t smsg_irq_handler(int irq, void *private)
 			memcpy(&(ch->caches[wr]), msg, sizeof(struct smsg));
 			writel(readl(ch->wrptr) + 1, ch->wrptr);
 		}
-#ifndef CONFIG_SPRD_MAILBOX_FIFO
+
 		/* update smsg rdptr */
 		writel(readl(ipc->rxbuf_rdptr) + 1, ipc->rxbuf_rdptr);
-#endif
+
 		wake_up_interruptible_all(&(ch->rxwait));
 
 		atomic_dec(&(ipc->busy[msg->channel]));
-#ifdef CONFIG_SPRD_MAILBOX_FIFO
-	}while(0);
-#else
 	}
-#endif
 
 	wake_lock_timeout(&sipc_wake_lock, HZ / 2);
-	smsg_irq_cnt++;
 
 	return IRQ_HANDLED;
 }
@@ -182,15 +139,10 @@ int smsg_ipc_create(uint8_t dst, struct smsg_ipc *ipc)
 
 	smsg_ipcs[dst] = ipc;
 
-#ifndef CONFIG_SPRD_MAILBOX_FIFO
-	smsg_clear_queue(ipc);
-#endif
-
 #ifdef CONFIG_SPRD_MAILBOX
-#ifndef CONFIG_SPRD_MAILBOX_FIFO
 	/* explicitly call irq handler in case of missing irq on boot */
 	ipc->irq_handler(ipc->core_id, ipc);
-#endif
+
 	rval = mbox_register_irq_handle(ipc->core_id, ipc->irq_handler, ipc);
 	if (rval != 0) {
 		printk(KERN_ERR "Failed to register irq handler in mailbox: %s\n",
@@ -299,7 +251,6 @@ int smsg_ch_open(uint8_t dst, uint8_t channel, int timeout)
 	}
 
 open_done:
-	pr_debug("smsg_ch_open channel %d-%d success\n",dst, channel);
 	ipc->states[channel] = CHAN_STATE_OPENED;
 	atomic_dec(&(ipc->busy[channel]));
 
@@ -346,9 +297,7 @@ int smsg_ch_close(uint8_t dst, uint8_t channel,  int timeout)
 int smsg_send(uint8_t dst, struct smsg *msg, int timeout)
 {
 	struct smsg_ipc *ipc = smsg_ipcs[dst];
-#ifndef CONFIG_SPRD_MAILBOX_FIFO
-	size_t txpos;
-#endif
+	uintptr_t txpos;
 	int rval = 0;
 	unsigned long flags;
 
@@ -373,23 +322,15 @@ int smsg_send(uint8_t dst, struct smsg *msg, int timeout)
 	pr_debug("send smsg: channel=%d, type=%d, flag=0x%04x, value=0x%08x\n",
 			msg->channel, msg->type, msg->flag, msg->value);
 
-#ifdef CONFIG_SPRD_MAILBOX_FIFO
-	if(ipc->rxirq_status(ipc->id) > 0){
-#else
 	spin_lock_irqsave(&(ipc->txpinlock), flags);
 	if ((int)(readl(ipc->txbuf_wrptr) -
 		readl(ipc->txbuf_rdptr)) >= ipc->txbuf_size) {
-		spin_unlock_irqrestore(&(ipc->txpinlock), flags);
-#endif
 		printk(KERN_WARNING "smsg txbuf is full!\n");
 		rval = -EBUSY;
 		goto send_failed;
 	}
 
 	/* calc txpos and write smsg */
-#ifdef CONFIG_SPRD_MAILBOX_FIFO
-	ipc->txirq_trigger(ipc->id, *(u64 *)msg);
-#else
 	txpos = (readl(ipc->txbuf_wrptr) & (ipc->txbuf_size - 1)) *
 		sizeof(struct smsg) + ipc->txbuf_addr;
 	memcpy((void *)txpos, msg, sizeof(struct smsg));
@@ -400,11 +341,11 @@ int smsg_send(uint8_t dst, struct smsg *msg, int timeout)
 
 	/* update wrptr */
 	writel(readl(ipc->txbuf_wrptr) + 1, ipc->txbuf_wrptr);
-	ipc->txirq_trigger(ipc->id);
-	spin_unlock_irqrestore(&(ipc->txpinlock), flags);
-#endif
+	ipc->txirq_trigger();
 
 send_failed:
+	spin_unlock_irqrestore(&(ipc->txpinlock), flags);
+
 	return rval;
 }
 
@@ -495,10 +436,9 @@ int smsg_recv(uint8_t dst, struct smsg *msg, int timeout)
 	rd = readl(ch->rdptr) & (SMSG_CACHE_NR - 1);
 	memcpy(msg, &(ch->caches[rd]), sizeof(struct smsg));
 	writel(readl(ch->rdptr) + 1, ch->rdptr);
-#ifndef CONFIG_SPRD_MAILBOX_FIFO
+
 	pr_debug("read smsg: wrptr=%d, rdptr=%d, rd=%d\n",
 			readl(ch->wrptr), readl(ch->rdptr), rd);
-#endif
 	pr_debug("recv smsg: channel=%d, type=%d, flag=0x%04x, value=0x%08x\n",
 			msg->channel, msg->type, msg->flag, msg->value);
 
@@ -515,10 +455,6 @@ static int smsg_debug_show(struct seq_file *m, void *private)
 	struct smsg_ipc *smsg_sipc = NULL;
 	int i, j;
 
-#ifdef CONFIG_SPRD_MAILBOX_FIFO
-	//mailbox_debug_show();
-#endif
-
 	for (i = 0; i < SIPC_ID_NR; i++) {
 		smsg_sipc = smsg_ipcs[i];
 		if (!smsg_sipc) {
@@ -527,12 +463,11 @@ static int smsg_debug_show(struct seq_file *m, void *private)
 		seq_printf(m, "sipc: %s: \n", smsg_sipc->name);
 		seq_printf(m, "dst: 0x%0x, irq: 0x%0x\n",
 			   smsg_sipc->dst, smsg_sipc->irq);
-#ifndef CONFIG_SPRD_MAILBOX_FIFO
 		seq_printf(m, "txbufAddr: 0x%0x, txbufsize: 0x%0x, txbufrdptr: [0x%0x]=%lu, txbufwrptr: [0x%0x]=%lu\n",
 			   smsg_sipc->txbuf_addr, smsg_sipc->txbuf_size, smsg_sipc->txbuf_rdptr, readl(smsg_sipc->txbuf_rdptr), smsg_sipc->txbuf_wrptr, readl(smsg_sipc->txbuf_wrptr));
 		seq_printf(m, "rxbufAddr: 0x%0x, rxbufsize: 0x%0x, rxbufrdptr: [0x%0x]=%lu, rxbufwrptr: [0x%0x]=%lu\n",
 			   smsg_sipc->rxbuf_addr, smsg_sipc->rxbuf_size, smsg_sipc->rxbuf_rdptr, readl(smsg_sipc->rxbuf_rdptr), smsg_sipc->rxbuf_wrptr, readl(smsg_sipc->rxbuf_wrptr));
-#endif
+
 		for (j=0;  j<SMSG_CH_NR; j++) {
 			seq_printf(m, "channel[%d] states: %d\n", j, smsg_sipc->states[j]);
 		}
@@ -565,8 +500,6 @@ int smsg_init_debugfs(void *root )
 static int sipc_syscore_suspend(void)
 {
 	int ret = has_wake_lock(WAKE_LOCK_SUSPEND) ? -EAGAIN : 0;
-	pr_info("smsg_irq occured %u times during this wake up\n", smsg_irq_cnt);
-	smsg_irq_cnt = 0;
 	return ret;
 }
 

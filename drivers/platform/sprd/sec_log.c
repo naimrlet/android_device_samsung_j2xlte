@@ -150,8 +150,6 @@ void sec_debug_set_last_regs_access(void)
 
 void sec_debug_panic_message(int en)
 {
-	if(unlikely(!sec_log_buffer || !sec_log_ptr))
-		return;
 	if(!en && !sec_log_buffer->from)
 		sec_log_buffer->from = *sec_log_ptr;
 	else if(!sec_log_buffer->to)

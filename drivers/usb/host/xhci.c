@@ -27,7 +27,6 @@
 #include <linux/moduleparam.h>
 #include <linux/slab.h>
 #include <linux/dmi.h>
-#include <linux/dma-mapping.h>
 
 #include "xhci.h"
 
@@ -101,8 +100,6 @@ void xhci_quiesce(struct xhci_hcd *xhci)
 int xhci_halt(struct xhci_hcd *xhci)
 {
 	int ret;
-	struct usb_hcd *hcd = xhci_to_hcd(xhci);
-
 	xhci_dbg(xhci, "// Halt the HC\n");
 	xhci_quiesce(xhci);
 
@@ -111,21 +108,16 @@ int xhci_halt(struct xhci_hcd *xhci)
 	if (!ret) {
 		xhci->xhc_state |= XHCI_STATE_HALTED;
 		xhci->cmd_ring_state = CMD_RING_STATE_STOPPED;
-	} else {
+	} else
 		xhci_warn(xhci, "Host not halted after %u microseconds.\n",
 				XHCI_MAX_HALT_USEC);
-
-		if (hcd->driver->halt_failed_cleanup)
-			hcd->driver->halt_failed_cleanup(hcd);
-	}
-
 	return ret;
 }
 
 /*
  * Set the run bit and wait for the host to be running.
  */
-int xhci_start(struct xhci_hcd *xhci)
+static int xhci_start(struct xhci_hcd *xhci)
 {
 	u32 temp;
 	int ret;
@@ -147,7 +139,8 @@ int xhci_start(struct xhci_hcd *xhci)
 				"waited %u microseconds.\n",
 				XHCI_MAX_HALT_USEC);
 	if (!ret)
-		xhci->xhc_state &= ~XHCI_STATE_HALTED;
+		xhci->xhc_state &= ~(XHCI_STATE_HALTED | XHCI_STATE_DYING);
+
 	return ret;
 }
 
@@ -340,6 +333,16 @@ static void xhci_cleanup_msix(struct xhci_hcd *xhci)
 	return;
 }
 
+static void xhci_msix_sync_irqs(struct xhci_hcd *xhci)
+{
+	int i;
+
+	if (xhci->msix_entries) {
+		for (i = 0; i < xhci->msix_count; i++)
+			synchronize_irq(xhci->msix_entries[i].vector);
+	}
+}
+
 static int xhci_try_enable_msi(struct usb_hcd *hcd)
 {
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
@@ -401,7 +404,11 @@ static inline void xhci_cleanup_msix(struct xhci_hcd *xhci)
 {
 }
 
-#endif /* CONFIG_PCI */
+static inline void xhci_msix_sync_irqs(struct xhci_hcd *xhci)
+{
+}
+
+#endif
 
 static void compliance_mode_recovery(unsigned long arg)
 {
@@ -626,13 +633,6 @@ int xhci_run(struct usb_hcd *hcd)
 
 	xhci_dbg(xhci, "xhci_run\n");
 
-	xhci_dbg(xhci, "Calling HCD init\n");
-	/* Initialize HCD and host controller data structures. */
-	ret = xhci_init(hcd);
-	if (ret)
-		return ret;
-	xhci_dbg(xhci, "Called HCD init\n");
-
 	ret = xhci_try_enable_msi(hcd);
 	if (ret)
 		return ret;
@@ -792,23 +792,6 @@ void xhci_shutdown(struct usb_hcd *hcd)
 }
 
 #ifdef CONFIG_PM
-
-#ifdef CONFIG_PCI
-static void xhci_msix_sync_irqs(struct xhci_hcd *xhci)
-{
-	int i;
-
-	if (xhci->msix_entries) {
-		for (i = 0; i < xhci->msix_count; i++)
-			synchronize_irq(xhci->msix_entries[i].vector);
-	}
-}
-#else
-static void xhci_msix_sync_irqs(struct xhci_hcd *xhci)
-{
-}
-#endif /* CONFIG_PCI */
-
 static void xhci_save_registers(struct xhci_hcd *xhci)
 {
 	xhci->s3.command = xhci_readl(xhci, &xhci->op_regs->command);
@@ -913,14 +896,11 @@ int xhci_suspend(struct xhci_hcd *xhci)
 	if (hcd->state != HC_STATE_SUSPENDED ||
 			xhci->shared_hcd->state != HC_STATE_SUSPENDED)
 		return -EINVAL;
-	if (xhci->xhc_state & XHCI_STATE_HALTED)
-		return -EINVAL;
+
 	/* Don't poll the roothubs on bus suspend. */
 	xhci_dbg(xhci, "%s: stopping port polling.\n", __func__);
 	clear_bit(HCD_FLAG_POLL_RH, &hcd->flags);
 	del_timer_sync(&hcd->rh_timer);
-	clear_bit(HCD_FLAG_POLL_RH, &xhci->shared_hcd->flags);
-	del_timer_sync(&xhci->shared_hcd->rh_timer);
 
 	spin_lock_irq(&xhci->lock);
 	clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
@@ -987,9 +967,6 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 	int			retval = 0;
 	bool			comp_timer_running = false;
 
-
-	if (xhci->xhc_state & XHCI_STATE_HALTED)
-		return -EINVAL;
 	/* Wait a bit if either of the roothubs need to settle from the
 	 * transition into bus suspend.
 	 */
@@ -1129,8 +1106,6 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 	xhci_dbg(xhci, "%s: starting port polling.\n", __func__);
 	set_bit(HCD_FLAG_POLL_RH, &hcd->flags);
 	usb_hcd_poll_rh_status(hcd);
-	set_bit(HCD_FLAG_POLL_RH, &xhci->shared_hcd->flags);
-	usb_hcd_poll_rh_status(xhci->shared_hcd);
 
 	return retval;
 }
@@ -1313,9 +1288,6 @@ int xhci_urb_enqueue(struct usb_hcd *hcd, struct urb *urb, gfp_t mem_flags)
 					true, true, __func__) <= 0)
 		return -EINVAL;
 
-	if (xhci->xhc_state & XHCI_STATE_HALTED)
-		return -EINVAL;
-
 	slot_id = urb->dev->slot_id;
 	ep_index = xhci_get_endpoint_index(&urb->ep->desc);
 
@@ -1328,6 +1300,11 @@ int xhci_urb_enqueue(struct usb_hcd *hcd, struct urb *urb, gfp_t mem_flags)
 
 	if (usb_endpoint_xfer_isoc(&urb->ep->desc))
 		size = urb->number_of_packets;
+	else if (usb_endpoint_is_bulk_out(&urb->ep->desc) &&
+	    urb->transfer_buffer_length > 0 &&
+	    urb->transfer_flags & URB_ZERO_PACKET &&
+	    !(urb->transfer_buffer_length % usb_endpoint_maxp(&urb->ep->desc)))
+		size = 2;
 	else
 		size = 1;
 
@@ -1516,10 +1493,6 @@ int xhci_urb_dequeue(struct usb_hcd *hcd, struct urb *urb, int status)
 	struct xhci_virt_ep *ep;
 
 	xhci = hcd_to_xhci(hcd);
-
-	if (xhci->xhc_state & XHCI_STATE_HALTED)
-		return -EINVAL;
-
 	spin_lock_irqsave(&xhci->lock, flags);
 	/* Make sure the URB hasn't completed or been unlinked already */
 	ret = usb_hcd_check_unlink_urb(hcd, urb, status);
@@ -1529,7 +1502,9 @@ int xhci_urb_dequeue(struct usb_hcd *hcd, struct urb *urb, int status)
 	if (temp == 0xffffffff || (xhci->xhc_state & XHCI_STATE_HALTED)) {
 		xhci_dbg(xhci, "HW died, freeing TD.\n");
 		urb_priv = urb->hcpriv;
-		for (i = urb_priv->td_cnt; i < urb_priv->length; i++) {
+		for (i = urb_priv->td_cnt;
+		     i < urb_priv->length && xhci->devs[urb->dev->slot_id];
+		     i++) {
 			td = urb_priv->td[i];
 			if (!list_empty(&td->td_list))
 				list_del_init(&td->td_list);
@@ -1628,8 +1603,7 @@ int xhci_drop_endpoint(struct usb_hcd *hcd, struct usb_device *udev,
 	if (ret <= 0)
 		return ret;
 	xhci = hcd_to_xhci(hcd);
-	if (xhci->xhc_state & XHCI_STATE_DYING ||
-		xhci->xhc_state & XHCI_STATE_HALTED)
+	if (xhci->xhc_state & XHCI_STATE_DYING)
 		return -ENODEV;
 
 	xhci_dbg(xhci, "%s called for udev %p\n", __func__, udev);
@@ -1718,8 +1692,7 @@ int xhci_add_endpoint(struct usb_hcd *hcd, struct usb_device *udev,
 		return ret;
 	}
 	xhci = hcd_to_xhci(hcd);
-	if (xhci->xhc_state & XHCI_STATE_DYING ||
-		xhci->xhc_state & XHCI_STATE_HALTED)
+	if (xhci->xhc_state & XHCI_STATE_DYING)
 		return -ENODEV;
 
 	added_ctxs = xhci_get_endpoint_flag(&ep->desc);
@@ -2722,8 +2695,6 @@ int xhci_check_bandwidth(struct usb_hcd *hcd, struct usb_device *udev)
 	xhci = hcd_to_xhci(hcd);
 	if (xhci->xhc_state & XHCI_STATE_DYING)
 		return -ENODEV;
-	if (xhci->xhc_state & XHCI_STATE_HALTED)
-		return -ENODEV;
 
 	xhci_dbg(xhci, "%s called for udev %p\n", __func__, udev);
 	virt_dev = xhci->devs[udev->slot_id];
@@ -2903,9 +2874,6 @@ void xhci_endpoint_reset(struct usb_hcd *hcd,
 	struct xhci_virt_ep *virt_ep;
 
 	xhci = hcd_to_xhci(hcd);
-	if (xhci->xhc_state & XHCI_STATE_HALTED)
-		return;
-
 	udev = (struct usb_device *) ep->hcpriv;
 	/* Called with a root hub endpoint (or an endpoint that wasn't added
 	 * with xhci_add_endpoint()
@@ -3125,9 +3093,6 @@ int xhci_alloc_streams(struct usb_hcd *hcd, struct usb_device *udev,
 	xhci_dbg(xhci, "Driver wants %u stream IDs (including stream 0).\n",
 			num_streams);
 
-	if (xhci->xhc_state & XHCI_STATE_HALTED)
-		return -EINVAL;
-
 	config_cmd = xhci_alloc_command(xhci, true, true, mem_flags);
 	if (!config_cmd) {
 		xhci_dbg(xhci, "Could not allocate xHCI command structure.\n");
@@ -3262,9 +3227,6 @@ int xhci_free_streams(struct usb_hcd *hcd, struct usb_device *udev,
 	u32 changed_ep_bitmask;
 
 	xhci = hcd_to_xhci(hcd);
-	if (xhci->xhc_state & XHCI_STATE_HALTED)
-		return -EINVAL;
-
 	vdev = xhci->devs[udev->slot_id];
 
 	/* Set up a configure endpoint command to remove the streams rings */
@@ -3390,9 +3352,6 @@ int xhci_discover_or_reset_device(struct usb_hcd *hcd, struct usb_device *udev)
 	if (ret <= 0)
 		return ret;
 	xhci = hcd_to_xhci(hcd);
-	if (xhci->xhc_state & XHCI_STATE_HALTED)
-		return -ENODEV;
-
 	slot_id = udev->slot_id;
 	virt_dev = xhci->devs[slot_id];
 	if (!virt_dev) {
@@ -3404,6 +3363,9 @@ int xhci_discover_or_reset_device(struct usb_hcd *hcd, struct usb_device *udev)
 		else
 			return -EINVAL;
 	}
+
+	if (virt_dev->tt_info)
+		old_active_eps = virt_dev->tt_info->active_eps;
 
 	if (virt_dev->udev != udev) {
 		/* If the virt_dev and the udev does not match, this virt_dev
@@ -3552,9 +3514,7 @@ void xhci_free_dev(struct usb_hcd *hcd, struct usb_device *udev)
 {
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
 	struct xhci_virt_device *virt_dev;
-#ifndef CONFIG_USB_DEFAULT_PERSIST
 	struct device *dev = hcd->self.controller;
-#endif
 	unsigned long flags;
 	u32 state;
 	int i, ret;
@@ -3568,9 +3528,6 @@ void xhci_free_dev(struct usb_hcd *hcd, struct usb_device *udev)
 	if (xhci->quirks & XHCI_RESET_ON_RESUME)
 		pm_runtime_put_noidle(dev);
 #endif
-
-	if (xhci->xhc_state & XHCI_STATE_HALTED)
-		return;
 
 	ret = xhci_check_args(hcd, udev, NULL, 0, true, __func__);
 	/* If the host is halted due to driver unload, we still need to free the
@@ -3643,16 +3600,11 @@ static int xhci_reserve_host_control_ep_resources(struct xhci_hcd *xhci)
 int xhci_alloc_dev(struct usb_hcd *hcd, struct usb_device *udev)
 {
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
-#ifndef CONFIG_USB_DEFAULT_PERSIST
 	struct device *dev = hcd->self.controller;
-#endif
 	unsigned long flags;
 	int timeleft;
 	int ret;
 	union xhci_trb *cmd_trb;
-
-	if (xhci->xhc_state & XHCI_STATE_HALTED)
-		return -EINVAL;
 
 	spin_lock_irqsave(&xhci->lock, flags);
 	cmd_trb = xhci_find_next_enqueue(xhci->cmd_ring);
@@ -3749,8 +3701,6 @@ int xhci_address_device(struct usb_hcd *hcd, struct usb_device *udev)
 		xhci_dbg(xhci, "Bad Slot ID %d\n", udev->slot_id);
 		return -EINVAL;
 	}
-	if (xhci->xhc_state & XHCI_STATE_HALTED)
-		return -ENODEV;
 
 	virt_dev = xhci->devs[udev->slot_id];
 
@@ -3995,8 +3945,6 @@ static int xhci_usb2_software_lpm_test(struct usb_hcd *hcd,
 	hird = xhci_calculate_hird_besl(xhci, udev);
 	temp = PORT_L1DS(udev->slot_id) | PORT_HIRD(hird);
 	xhci_writel(xhci, temp, pm_addr);
-	if (xhci->quirks & XHCI_PORTSC_DELAY)
-		ndelay(100);
 
 	/* Set port link state to U2(L1) */
 	addr = port_array[port_num];
@@ -4075,7 +4023,6 @@ int xhci_set_usb2_hardware_lpm(struct usb_hcd *hcd,
 	unsigned int	port_num;
 	unsigned long	flags;
 	int		hird;
-	bool		delay = false;
 
 	if (hcd->speed == HCD_USB3 || !xhci->hw_lpm_support ||
 			!udev->lpm_capable)
@@ -4087,9 +4034,6 @@ int xhci_set_usb2_hardware_lpm(struct usb_hcd *hcd,
 
 	if (udev->usb2_hw_lpm_capable != 1)
 		return -EPERM;
-
-	if (xhci->quirks & XHCI_PORTSC_DELAY)
-		delay = true;
 
 	spin_lock_irqsave(&xhci->lock, flags);
 
@@ -4107,18 +4051,12 @@ int xhci_set_usb2_hardware_lpm(struct usb_hcd *hcd,
 		temp &= ~PORT_HIRD_MASK;
 		temp |= PORT_HIRD(hird) | PORT_RWE;
 		xhci_writel(xhci, temp, pm_addr);
-		if (delay)
-			ndelay(100);
 		temp = xhci_readl(xhci, pm_addr);
 		temp |= PORT_HLE;
 		xhci_writel(xhci, temp, pm_addr);
-		if (delay)
-			ndelay(100);
 	} else {
 		temp &= ~(PORT_HLE | PORT_RWE | PORT_HIRD_MASK);
 		xhci_writel(xhci, temp, pm_addr);
-		if (delay)
-			ndelay(100);
 	}
 
 	spin_unlock_irqrestore(&xhci->lock, flags);
@@ -4480,13 +4418,21 @@ static int xhci_change_max_exit_latency(struct xhci_hcd *xhci,
 	int ret;
 
 	spin_lock_irqsave(&xhci->lock, flags);
-	if (max_exit_latency == xhci->devs[udev->slot_id]->current_mel) {
+
+	virt_dev = xhci->devs[udev->slot_id];
+
+	/*
+	 * virt_dev might not exists yet if xHC resumed from hibernate (S4) and
+	 * xHC was re-initialized. Exit latency will be set later after
+	 * hub_port_finish_reset() is done and xhci->devs[] are re-allocated
+	 */
+
+	if (!virt_dev || max_exit_latency == virt_dev->current_mel) {
 		spin_unlock_irqrestore(&xhci->lock, flags);
 		return 0;
 	}
 
 	/* Attempt to issue an Evaluate Context command to change the MEL. */
-	virt_dev = xhci->devs[udev->slot_id];
 	command = xhci->lpm_command;
 	xhci_slot_copy(xhci, command->in_ctx, virt_dev->out_ctx);
 	spin_unlock_irqrestore(&xhci->lock, flags);
@@ -4645,8 +4591,6 @@ int xhci_update_hub_device(struct usb_hcd *hcd, struct usb_device *hdev,
 	/* Ignore root hubs */
 	if (!hdev->parent)
 		return 0;
-	if (xhci->xhc_state & XHCI_STATE_HALTED)
-		return -ENODEV;
 
 	vdev = xhci->devs[hdev->slot_id];
 	if (!vdev) {
@@ -4673,8 +4617,16 @@ int xhci_update_hub_device(struct usb_hcd *hcd, struct usb_device *hdev,
 	ctrl_ctx->add_flags |= cpu_to_le32(SLOT_FLAG);
 	slot_ctx = xhci_get_slot_ctx(xhci, config_cmd->in_ctx);
 	slot_ctx->dev_info |= cpu_to_le32(DEV_HUB);
+	/*
+	 * refer to section 6.2.2: MTT should be 0 for full speed hub,
+	 * but it may be already set to 1 when setup an xHCI virtual
+	 * device, so clear it anyway.
+	 */
 	if (tt->multi)
 		slot_ctx->dev_info |= cpu_to_le32(DEV_MTT);
+	else if (hdev->speed == USB_SPEED_FULL)
+		slot_ctx->dev_info &= cpu_to_le32(~DEV_MTT);
+
 	if (xhci->hci_version > 0x95) {
 		xhci_dbg(xhci, "xHCI version %x needs hub "
 				"TT think time and number of ports\n",
@@ -4808,9 +4760,6 @@ int xhci_gen_setup(struct usb_hcd *hcd, xhci_get_quirks_t get_quirks)
 	retval = xhci_reset(xhci);
 	if (retval)
 		goto error;
-
-	if (xhci->quirks & XHCI_RESET_DELAY)
-		usleep_range(350, 1000);
 	xhci_dbg(xhci, "Reset complete\n");
 
 	temp = xhci_readl(xhci, &xhci->cap_regs->hcc_params);
@@ -4821,11 +4770,13 @@ int xhci_gen_setup(struct usb_hcd *hcd, xhci_get_quirks_t get_quirks)
 		dma_set_mask(hcd->self.controller, DMA_BIT_MASK(32));
 	}
 
-	xhci_info(xhci, "hcc params 0x%08x hci version 0x%x quirks 0x%08x\n",
-			  xhci->hcc_params, xhci->hci_version, xhci->quirks);
-
+	xhci_dbg(xhci, "Calling HCD init\n");
+	/* Initialize HCD and host controller data structures. */
+	retval = xhci_init(hcd);
+	if (retval)
+		goto error;
+	xhci_dbg(xhci, "Called HCD init\n");
 	return 0;
-
 error:
 	kfree(xhci);
 	return retval;
@@ -4838,6 +4789,9 @@ MODULE_LICENSE("GPL");
 static int __init xhci_hcd_init(void)
 {
 	int retval;
+
+	if (usb_disabled())
+		return -ENODEV;
 
 	retval = xhci_register_pci();
 	if (retval < 0) {
@@ -4866,6 +4820,7 @@ static int __init xhci_hcd_init(void)
 	BUILD_BUG_ON(sizeof(struct xhci_intr_reg) != 8*32/8);
 	/* xhci_run_regs has eight fields and embeds 128 xhci_intr_regs */
 	BUILD_BUG_ON(sizeof(struct xhci_run_regs) != (8+8*128)*32/8);
+
 	return 0;
 unreg_pci:
 	xhci_unregister_pci();

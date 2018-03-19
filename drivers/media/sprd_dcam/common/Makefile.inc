@@ -1,21 +1,13 @@
 # SC88XX Platform Support
 
 ifeq ($(CONFIG_ARCH_SCX30G2),y)
-ccflags-y += -Idrivers/media/sprd_dcam/tshark2
+ccflags-y += -Idrivers/media/sprd_dcam/tshark
 DEFS = -DVERSION3D=1
 else ifeq ($(CONFIG_ARCH_SCX30G),y)
-ifeq ($(CONFIG_ARCH_SCX20),y)
-ccflags-y += -Idrivers/media/sprd_dcam/pike
-else
 ccflags-y += -Idrivers/media/sprd_dcam/tshark
-endif
 DEFS = -DVERSION3T=1
 else ifeq ($(CONFIG_ARCH_SCX35L),y)
-ifeq ($(CONFIG_MACH_SP9830I),y)
-ccflags-y += -Idrivers/media/sprd_dcam/tshark2
-else
 ccflags-y += -Idrivers/media/sprd_dcam/sharkl
-endif
 DEFS = -DVERSION3L=1
 endif
 

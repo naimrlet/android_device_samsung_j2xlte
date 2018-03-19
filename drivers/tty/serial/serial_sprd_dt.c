@@ -37,7 +37,6 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
-#include <soc/sprd/sci_glb_regs.h>
 
 #define IRQ_WAKEUP 	0
 
@@ -123,6 +122,8 @@
 #define UART_DUMP_REG   1
 #define UART_TX_DATA_INFO 2
 #define UART_TX_DEBUG_FUNC_CLOSE 3
+
+#define BT_UART_PORT 0
 
 struct uart_sprd_debug
 {
@@ -283,6 +284,7 @@ static inline void serial_sprd_tx_chars(int irq, void *dev_id)
 	struct circ_buf *xmit = &port->state->xmit;
 	struct uart_sprd_debug *temp_data = (struct uart_sprd_debug *)(port->private_data);
 	int count;
+	unsigned long flags;
 
 	if (port->x_char) {
 		serial_out(port, ARM_UART_TXD, port->x_char);
@@ -290,10 +292,13 @@ static inline void serial_sprd_tx_chars(int irq, void *dev_id)
 		port->x_char = 0;
 		return;
 	}
+	spin_lock_irqsave(&port->lock, flags);
 	if (uart_circ_empty(xmit) || uart_tx_stopped(port)) {
 		serial_sprd_stop_tx(port);
+		spin_unlock_irqrestore(&port->lock, flags);
 		return;
 	}
+	spin_unlock_irqrestore(&port->lock, flags);
 	count = SP_TX_FIFO;
 
 	if (temp_data->debug_function_flag) {
@@ -322,9 +327,11 @@ static inline void serial_sprd_tx_chars(int irq, void *dev_id)
 	if (uart_circ_chars_pending(xmit) < WAKEUP_CHARS) {
 		uart_write_wakeup(port);
 	}
+	spin_lock_irqsave(&port->lock, flags);
 	if (uart_circ_empty(xmit)) {
 		serial_sprd_stop_tx(port);
 	}
+	spin_unlock_irqrestore(&port->lock, flags);
 
 }
 
@@ -338,13 +345,7 @@ static irqreturn_t serial_sprd_interrupt_chars(int irq, void *dev_id)
 
 	int_status = serial_in(port, ARM_UART_STS2);
 
-	if(int_status & UART_STS_TIMEOUT) {
-		serial_out(port, ARM_UART_ICLR, UART_STS_TIMEOUT);
-	}
-	else {
-		serial_out(port, ARM_UART_ICLR, 0xffffdfff);
-	}
-
+	serial_out(port, ARM_UART_ICLR, 0xffffffff);
 
 	if (int_status &
 	    (UART_STS_RX_FIFO_FULL | UART_STS_BREAK_DETECT |
@@ -401,10 +402,35 @@ static int serial_sprd_startup(struct uart_port *port)
 {
 	int ret = 0;
 	unsigned int ien, ctrl1;
-	
-	spin_lock(&port->lock);
-	serial_out(port, ARM_UART_CTL2, ((SP_TX_FIFO << 8) | SP_RX_FIFO));
+	int rx_count = 130;
+	int tx_count = 130;
 
+	/* FIXME: don't know who change u0cts pin in 88 */
+	serial_sprd_pin_config();
+
+	/* set fifo water mark,tx_int_mark=8,rx_int_mark=1 */
+#if 0				/* ? */
+	serial_out(port, ARM_UART_CTL2, 0x801);
+#endif
+
+	serial_out(port, ARM_UART_CTL2, ((SP_TX_FIFO << 8) | SP_RX_FIFO));
+	/* clear rx fifo */
+	while (serial_in(port, ARM_UART_STS1) & 0x00ff) {
+		serial_in(port, ARM_UART_RXD);
+		if(!(rx_count)){
+			printk("serial_sprd_startup rx\n");
+			return -EIO;
+		}
+		rx_count --;
+	}
+	/* clear tx fifo */
+	while (serial_in(port, ARM_UART_STS1) & 0xff00){
+		if(!(tx_count)){
+			printk("serial_sprd_startup tx\n");
+			return -EIO;
+		}
+		tx_count --;
+	}
 	/* clear interrupt */
 	serial_out(port, ARM_UART_IEN, 0x00);
 	serial_out(port, ARM_UART_ICLR, 0xffffffff);
@@ -443,24 +469,14 @@ static int serial_sprd_startup(struct uart_port *port)
 	    UART_IEN_RX_FIFO_FULL | UART_IEN_TX_FIFO_EMPTY |
 	    UART_IEN_BREAK_DETECT | UART_IEN_TIMEOUT;
 	serial_out(port, ARM_UART_IEN, ien);
-	spin_unlock(&port->lock);
+
 	return 0;
-}
-
-static void serial_sprd_reset(struct uart_port *port)
-{
-	unsigned long value = 0;
-
-	writel_relaxed((BIT_UART0_SOFT_RST<<(port->line)), REG_AP_APB_APB_RST);
-
-	value = readl_relaxed( REG_AP_APB_APB_RST);
-	value &= ~(BIT_UART0_SOFT_RST<<(port->line));
-	writel_relaxed(value, REG_AP_APB_APB_RST);
 }
 
 static void serial_sprd_shutdown(struct uart_port *port)
 {
-	serial_sprd_reset(port);
+	serial_out(port, ARM_UART_IEN, 0x0);
+	serial_out(port, ARM_UART_ICLR, 0xffffffff);
 	free_irq(port->irq, port);
 }
 
@@ -475,15 +491,12 @@ static void serial_sprd_set_termios(struct uart_port *port,
 	baud = uart_get_baud_rate(port, termios, old, 1200, 3000000);
 
 #ifdef CONFIG_SPRD_2331
-        printk("marlin sprd_dt serial_sprd_set_termios baud %d\n", baud);
-        if(baud == 3000000)
-            baud = 3250000; // add this case, becaulse UART support 325000 baud rate
-		quot = (unsigned int)((port->uartclk + baud / 2) / baud);
-#else
-		quot = (unsigned int)((port->uartclk) / baud);
+	//printk("marlin sprd_dt serial_sprd_set_termios baud %d\n", baud);
+	if(baud == 3000000)
+		baud = 3250000; // add this case, becaulse UART support 325000 baud rate
 #endif
 
-
+	quot = (unsigned int)((port->uartclk + baud / 2) / baud);
 
 	/* set data length */
 	lcr = serial_in(port, ARM_UART_CTL0);
@@ -640,6 +653,14 @@ static ssize_t serial_sprd_config_reg_store(struct device *dev,
 
 	return count;
 }
+
+extern void bcm_bt_lpm_exit_lpm_locked(struct uart_port *uport);
+static void serial_sprd_wake_peer(struct uart_port *port)
+{
+	if (port->line == BT_UART_PORT)
+		bcm_bt_lpm_exit_lpm_locked(port);
+}
+
 static DEVICE_ATTR(uart_conf, S_IRWXU | S_IRWXG, serial_sprd_config_reg_show,
 	serial_sprd_config_reg_store);
 
@@ -660,6 +681,7 @@ static struct uart_ops serial_sprd_ops = {
 	.request_port = serial_sprd_request_port,
 	.config_port = serial_sprd_config_port,
 	.verify_port = serial_sprd_verify_port,
+	.wake_peer	= serial_sprd_wake_peer,
 };
 static struct uart_port *serial_sprd_ports[UART_NR_MAX] = { 0 };
 
@@ -675,14 +697,13 @@ static struct {
 
 static int clk_startup(struct platform_device *pdev)
 {
+#ifndef CONFIG_64BIT
 	struct clk *clk;
 	struct clk *clk_parent;
 	char clk_name[10];
 	int ret;
 	int clksrc;
-	#ifndef CONFIG_64BIT
 	struct serial_data plat_local_data;
-	#endif
 
 	sprintf(clk_name, "clk_uart%d", pdev->id);
 	clk = clk_get(NULL, clk_name);
@@ -692,12 +713,8 @@ static int clk_startup(struct platform_device *pdev)
 		return -1;
 	}
 
-	#ifndef CONFIG_64BIT
 	plat_local_data = *(struct serial_data *)(pdev->dev.platform_data);
 	clksrc = plat_local_data.clk;
-	#else
-	clksrc = serial_sprd_ports[pdev->id]->uartclk;
-	#endif
 
 	if (clksrc == 48000000) {
 		clk_parent = clk_get(NULL, "clk_48m");
@@ -718,18 +735,17 @@ static int clk_startup(struct platform_device *pdev)
 	if (ret) {
 		printk("clock[%s]: clk_enable() failed!\n", clk_name);
 	}
-
+#endif
 	return 0;
 }
 
 static int serial_sprd_setup_port(struct platform_device *pdev,
 				  struct resource *mem, struct resource *irq)
 {
-	int ret;
 #ifndef CONFIG_64BIT
 	struct serial_data plat_local_data;
-#endif
 	struct device_node *np = pdev->dev.of_node;
+#endif
 	struct uart_port *up;
 	struct uart_sprd_debug * private_data ;
 	up = kzalloc(sizeof(*up), GFP_KERNEL);
@@ -748,13 +764,8 @@ static int serial_sprd_setup_port(struct platform_device *pdev,
 	plat_local_data = *(struct serial_data *)(pdev->dev.platform_data);
 	up->uartclk = plat_local_data.clk;
 #else
-	ret = of_property_read_u32(np, "sprdclk", &up->uartclk);
-	if (ret) {
-		dev_err(&pdev->dev, "fail to get sprdclk\n");
-		up->uartclk = 26000000;
-	}
+	up->uartclk = 26 * 1000 * 1000;
 #endif
-
 
 	up->irq = irq->start;
 	up->fifosize = 128;
@@ -797,10 +808,12 @@ static void serial_sprd_console_write(struct console *co, const char *s,
 	struct uart_port *port = serial_sprd_ports[co->index];
 	int ien;
 	int locked = 1;
+	unsigned long flags;
+
 	if (oops_in_progress)
-		locked = spin_trylock(&port->lock);
+		locked = spin_trylock_irqsave(&port->lock, flags);
 	else
-		spin_lock(&port->lock);
+		spin_lock_irqsave(&port->lock, flags);
 	/*firstly,save the IEN register and disable the interrupts */
 	ien = serial_in(port, ARM_UART_IEN);
 	serial_out(port, ARM_UART_IEN, 0x0);
@@ -810,7 +823,7 @@ static void serial_sprd_console_write(struct console *co, const char *s,
 	wait_for_xmitr(port);
 	serial_out(port, ARM_UART_IEN, ien);
 	if (locked)
-		spin_unlock(&port->lock);
+		spin_unlock_irqrestore(&port->lock, flags);
 }
 
 static int __init serial_sprd_console_setup(struct console *co, char *options)

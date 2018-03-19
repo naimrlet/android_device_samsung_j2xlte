@@ -28,6 +28,7 @@
 #endif /* CONFIG_PPC */
 
 #include <asm/page.h>
+#include <asm/system_info.h>
 
 /**
  * of_fdt_is_compatible - Return true if given node from the given blob has
@@ -731,6 +732,7 @@ int __init early_init_dt_scan_chosen(unsigned long node, const char *uname,
 	int l;
 	const char *p;
 	char *cmdline = data;
+	__be32 *serial;
 
 	pr_debug("search \"chosen\", depth: %d, uname: %s\n", depth, uname);
 
@@ -764,6 +766,12 @@ int __init early_init_dt_scan_chosen(unsigned long node, const char *uname,
 	}
 
 	pr_debug("Command line is: %s\n", (char*)data);
+
+	serial = of_get_flat_dt_prop(node, "serial", &l);
+	if (serial != NULL && l > 0) {
+		system_serial_low = *(serial++);
+		system_serial_high = *(serial);
+	}
 
 	/* break now */
 	return 1;

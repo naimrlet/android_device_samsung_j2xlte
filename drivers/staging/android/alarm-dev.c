@@ -41,7 +41,6 @@ do {									\
 #define ANDROID_ALARM_WAKEUP_MASK ( \
 	ANDROID_ALARM_RTC_WAKEUP_MASK | \
 	ANDROID_ALARM_POWER_OFF_WAKEUP_MASK | \
-	ANDROID_ALARM_POWER_ON_WAKEUP_MASK | \
 	ANDROID_ALARM_POWER_OFF_ALARM_MASK | \
 	ANDROID_ALARM_ELAPSED_REALTIME_WAKEUP_MASK)
 
@@ -70,7 +69,6 @@ static int is_wakeup(enum android_alarm_type type)
 {
 	return (type == ANDROID_ALARM_RTC_WAKEUP ||
 		type == ANDROID_ALARM_POWER_OFF_WAKEUP ||
-		type == ANDROID_ALARM_POWER_ON_WAKEUP ||
 		type == ANDROID_ALARM_POWER_OFF_ALARM ||
 		type == ANDROID_ALARM_ELAPSED_REALTIME_WAKEUP);
 }
@@ -196,7 +194,6 @@ static int alarm_get_time(enum android_alarm_type alarm_type,
 	case ANDROID_ALARM_RTC_WAKEUP:
 	case ANDROID_ALARM_RTC:
 	case ANDROID_ALARM_POWER_OFF_WAKEUP:
-	case ANDROID_ALARM_POWER_ON_WAKEUP:
 	case ANDROID_ALARM_POWER_OFF_ALARM:
 		getnstimeofday(ts);
 		break;
@@ -300,17 +297,16 @@ static long alarm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 	case ANDROID_ALARM_WAIT_CHANGE:
 		{
-            int delta_t = 0;
 			unsigned long flags;
 			spin_lock_irqsave(&alarm_slock, flags);
-            delta_t = delta;
-            spin_unlock_irqrestore(&alarm_slock, flags);
-			if (copy_to_user((void __user *)arg, &delta_t, sizeof(delta_t))) {
+			if (copy_to_user((void __user *)arg, &delta, 4)) {
 			    rv = -EFAULT;
 				delta = 0;
+			    spin_unlock_irqrestore(&alarm_slock, flags);
 				return rv;
 			}
 			delta = 0;
+			spin_unlock_irqrestore(&alarm_slock, flags);
 			break;
 		}
 	}
@@ -346,21 +342,6 @@ static long alarm_compat_ioctl(struct file *file, unsigned int cmd,
 		if (compat_put_timespec(&ts, (void __user *)arg))
 			return -EFAULT;
 		break;
-	case ANDROID_ALARM_WAIT_CHANGE:
-		{
-            int delta_t = 0;
-			unsigned long flags;
-			spin_lock_irqsave(&alarm_slock, flags);
-            delta_t = delta;
-            spin_unlock_irqrestore(&alarm_slock, flags);
-			if (copy_to_user((void __user *)arg, &delta_t, sizeof(delta_t))) {
-			    rv = -EFAULT;
-				delta = 0;
-				return rv;
-			}
-			delta = 0;
-			break;            
-		}
 	}
 
 	return 0;
@@ -479,8 +460,6 @@ static int __init alarm_dev_init(void)
 			CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
 	alarm_init(&alarms[ANDROID_ALARM_POWER_OFF_WAKEUP].u.alrm,
 			ALARM_POWEROFF, devalarm_alarmhandler);
-	alarm_init(&alarms[ANDROID_ALARM_POWER_ON_WAKEUP].u.alrm,
-			ALARM_POWERON, devalarm_alarmhandler);
 	alarm_init(&alarms[ANDROID_ALARM_POWER_OFF_ALARM].u.alrm,
 			ALARM_POWEROFF_ALARM, devalarm_alarmhandler);
 

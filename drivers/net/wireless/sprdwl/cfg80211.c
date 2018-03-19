@@ -1067,11 +1067,9 @@ static int sprdwl_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev,
 			return ret;
 		}
 		memcpy(vif->ssid, sme->ssid, sme->ssid_len);
-		if (sme->ssid_len <= IEEE80211_MAX_SSID_LEN)
-			vif->ssid[sme->ssid_len] = 0;
 		vif->ssid_len = sme->ssid_len;
 		wiphy_info(wiphy, "%s %s (%pM)\n", __func__,
-			   vif->ssid, sme->bssid);
+			   sme->ssid, sme->bssid);
 	}
 
 	vif->sm_state = SPRDWL_CONNECTING;
@@ -1084,7 +1082,6 @@ static int sprdwl_cfg80211_disconnect(struct wiphy *wiphy,
 	struct sprdwl_priv *priv = wiphy_priv(wiphy);
 	struct sprdwl_vif *vif = netdev_priv(ndev);
 	int ret;
-	enum sm_state old = 0;
 
 	wiphy_info(wiphy, "%s %s (%pM)\n", __func__, vif->ssid,
 		   vif->bssid);
@@ -1092,13 +1089,9 @@ static int sprdwl_cfg80211_disconnect(struct wiphy *wiphy,
 	if (!sprdwl_is_ready(priv))
 		return -EIO;
 
-	old = vif->sm_state;
-	vif->sm_state = SPRDWL_DISCONNECTED;
 	ret = sprdwl_disconnect_cmd(priv->sipc, reason_code);
-	if (ret < 0) {
+	if (ret < 0)
 		wiphy_err(wiphy, "%s Failed disconnect!\n", __func__);
-		vif->sm_state = old;
-	}
 
 	return ret;
 }
@@ -1352,11 +1345,7 @@ void sprdwl_scan_timeout(unsigned long data)
 	return;
 }
 
-/*
- * flag: 0 for scan_req
- *       1 for WIFI_EVENT_INTERNAL_BSS_INFO,update bss info when connecting
- */
-void sprdwl_event_scan_results(struct sprdwl_priv *priv, int flag)
+void sprdwl_event_scan_results(struct sprdwl_priv *priv, bool aborted)
 {
 	struct sprdwl_vif *vif;
 	struct wiphy *wiphy = priv->wiphy;
@@ -1372,20 +1361,17 @@ void sprdwl_event_scan_results(struct sprdwl_priv *priv, int flag)
 	s32 signal;
 	u64 tsf;
 	size_t ielen;
-	bool aborted = false;
 
-	wiphy_info(wiphy, "%s flag:%d\n", __func__, flag);
-	if (flag == 0) {
-		vif = priv->scan_vif;
-		if (!vif) {
-			wiphy_debug(wiphy, "%s scan timeout?\n", __func__);
-			return;
-		}
+	wiphy_info(wiphy, "%s\n", __func__);
+	vif = priv->scan_vif;
+	if (!vif) {
+		wiphy_debug(wiphy, "%s scan timeout?\n", __func__);
+		return;
 	}
 
-	if (left < 10) {
+	if (left < 10 || aborted) {
 		wiphy_err(wiphy, "%s invalid event len: %d\n", __func__, left);
-		/* aborted = true; */
+		aborted = true;
 		goto out;
 	}
 
@@ -1437,11 +1423,10 @@ void sprdwl_event_scan_results(struct sprdwl_priv *priv, int flag)
 		tsf = le64_to_cpu(mgmt->u.probe_resp.timestamp);
 		beacon_interval = le16_to_cpu(mgmt->u.probe_resp.beacon_int);
 		capability = le16_to_cpu(mgmt->u.probe_resp.capab_info);
-		if (flag == 0)
-			wiphy_dbg(wiphy, "   %s, %pM, channel %2u, signal %d\n",
-				  ieee80211_is_probe_resp(mgmt->frame_control)
-				  ? "proberesp" : "beacon   ",
-				  mgmt->bssid, channel_num, rssi);
+		wiphy_dbg(wiphy, "   %s, %pM, channel %2u, signal %d\n",
+			  ieee80211_is_probe_resp(mgmt->frame_control)
+			  ? "proberesp" : "beacon   ",
+			  mgmt->bssid, channel_num, rssi);
 
 		bss = cfg80211_inform_bss(wiphy, channel, mgmt->bssid,
 					  tsf, capability, beacon_interval, ie,
@@ -1450,19 +1435,17 @@ void sprdwl_event_scan_results(struct sprdwl_priv *priv, int flag)
 		if (unlikely(!bss))
 			wiphy_err(wiphy,
 				  "%s Failed to inform bss frame!\n", __func__);
-		else
-			cfg80211_put_bss(wiphy, bss);
+		cfg80211_put_bss(wiphy, bss);
 		i++;
 	}
 
 	if (left) {
-		wiphy_err(wiphy, "%s invalid event left len: %d\n",
-			  __func__, left);
+		wiphy_err(wiphy, "%s invalid event len: %d\n", __func__, left);
 		aborted = true;
 		goto out;
 	}
 
-	if (flag == 0 && vif->beacon_loss) {
+	if (vif->beacon_loss) {
 		bss = cfg80211_get_bss(wiphy, NULL,
 				       vif->bssid, vif->ssid, vif->ssid_len,
 				       WLAN_CAPABILITY_ESS,
@@ -1474,22 +1457,18 @@ void sprdwl_event_scan_results(struct sprdwl_priv *priv, int flag)
 		}
 	}
 
-	if (flag == 0)
-		wiphy_info(wiphy, "%s got %d BSSes flag:%d\n",
-			   __func__, i, flag);
+	wiphy_info(wiphy, "%s got %d BSSes\n", __func__, i);
 
 out:
-	if (flag == 0) {
-		if (timer_pending(&vif->scan_timer))
-			del_timer_sync(&vif->scan_timer);
-		spin_lock_bh(&vif->scan_lock);
-		if (vif->scan_req) {
-			cfg80211_scan_done(vif->scan_req, aborted);
-			vif->scan_req = NULL;
-			priv->scan_vif = NULL;
-		}
-		spin_unlock_bh(&vif->scan_lock);
+	if (timer_pending(&vif->scan_timer))
+		del_timer_sync(&vif->scan_timer);
+	spin_lock_bh(&vif->scan_lock);
+	if (vif->scan_req) {
+		cfg80211_scan_done(vif->scan_req, aborted);
+		vif->scan_req = NULL;
+		priv->scan_vif = NULL;
 	}
+	spin_unlock_bh(&vif->scan_lock);
 
 	return;
 }
@@ -1917,8 +1896,6 @@ static int sprdwl_cfg80211_start_ap(struct wiphy *wiphy,
 	}
 
 	memcpy(vif->ssid, info->ssid, info->ssid_len);
-	if (info->ssid_len <= IEEE80211_MAX_SSID_LEN)
-		vif->ssid[info->ssid_len] = 0;
 	vif->ssid_len = info->ssid_len;
 
 	ret = sprdwl_set_ap_sme_cmd(priv->sipc, 0);
@@ -2155,16 +2132,15 @@ static int sprdwl_cfg80211_remain_on_channel(struct wiphy *wiphy,
 	struct sprdwl_priv *priv = wiphy_priv(wiphy);
 	struct sprdwl_vif *vif = netdev_priv(wdev->netdev);
 	enum nl80211_channel_type channel_type = 0;
-	static u64 remain_index;
 	int ret;
 
-	*cookie = vif->listen_cookie = ++remain_index;
 	wiphy_info(wiphy, "%s %d for %dms. cookie=0x%llx\n",
 		   __func__, channel->center_freq, duration, *cookie);
 	if (!sprdwl_is_ready(priv))
 		return -EIO;
 
 	memcpy(&vif->listen_channel, channel, sizeof(struct ieee80211_channel));
+	vif->listen_cookie = *cookie;
 
 	/* send remain chan */
 
@@ -2467,11 +2443,15 @@ static const struct ieee80211_iface_limit sprdwl_iface_limits[] = {
 		.types = BIT(NL80211_IFTYPE_P2P_CLIENT) |
 			 BIT(NL80211_IFTYPE_P2P_GO)
 	},
+	{
+		.max = 1,
+		.types = BIT(NL80211_IFTYPE_P2P_DEVICE)
+	}
 };
 
 static const struct ieee80211_iface_combination sprdwl_iface_combos[] = {
 	{
-		 .max_interfaces = 2,
+		 .max_interfaces = 3,
 		 .num_different_channels = 2,
 		 .n_limits = ARRAY_SIZE(sprdwl_iface_limits),
 		 .limits = sprdwl_iface_limits
@@ -2506,8 +2486,8 @@ static void sprdwl_setup_wiphy(struct wiphy *wiphy)
 
 	wiphy->reg_notifier = sprdwl_reg_notify;
 
-	wiphy->interface_modes |= BIT(NL80211_IFTYPE_P2P_CLIENT) |
-				  BIT(NL80211_IFTYPE_P2P_GO);
+	wiphy->interface_modes |= BIT(NL80211_IFTYPE_P2P_DEVICE) |
+	    BIT(NL80211_IFTYPE_P2P_CLIENT) | BIT(NL80211_IFTYPE_P2P_GO);
 	wiphy->flags |= WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL;
 	/* set AP SME flag, also needed by STA mode? */
 	wiphy->flags |= WIPHY_FLAG_HAVE_AP_SME;

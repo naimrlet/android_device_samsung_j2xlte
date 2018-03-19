@@ -97,16 +97,9 @@ static void evdev_pass_values(struct evdev_client *client,
 	const struct input_value *v;
 	struct input_event event;
 	bool wakeup = false;
-	ktime_t time_monoboot;
 
 	event.time = ktime_to_timeval(client->clkid == CLOCK_MONOTONIC ?
 				      mono : real);
-
-	if(client->clkid == CLOCK_BOOTTIME)
-	{
-		time_monoboot = ktime_get_boottime();
-		event.time = ktime_to_timeval(time_monoboot);
-	}
 
 	/* Interrupts are disabled, just acquire the lock. */
 	spin_lock(&client->buffer_lock);
@@ -137,7 +130,6 @@ static void evdev_events(struct input_handle *handle,
 	ktime_t time_mono, time_real;
 
 	time_mono = ktime_get();
-
 	time_real = ktime_sub(time_mono, ktime_get_monotonic_offset());
 
 	rcu_read_lock();
@@ -344,6 +336,7 @@ static int evdev_open(struct inode *inode, struct file *file)
 	if (!client)
 		return -ENOMEM;
 
+	client->clkid = CLOCK_MONOTONIC;
 	client->bufsize = bufsize;
 	spin_lock_init(&client->buffer_lock);
 	snprintf(client->name, sizeof(client->name), "%s-%d",
@@ -362,7 +355,10 @@ static int evdev_open(struct inode *inode, struct file *file)
 
  err_free_client:
 	evdev_detach_client(evdev, client);
-	kfree(client);
+	if (is_vmalloc_addr(client))
+		vfree(client);
+	else
+		kfree(client);
 	return error;
 }
 
@@ -799,7 +795,7 @@ static long evdev_do_ioctl(struct file *file, unsigned int cmd,
 	case EVIOCSCLOCKID:
 		if (copy_from_user(&i, p, sizeof(unsigned int)))
 			return -EFAULT;
-		if (i != CLOCK_MONOTONIC && i != CLOCK_REALTIME && i != CLOCK_BOOTTIME)
+		if (i != CLOCK_MONOTONIC && i != CLOCK_REALTIME)
 			return -EINVAL;
 		client->clkid = i;
 		return 0;

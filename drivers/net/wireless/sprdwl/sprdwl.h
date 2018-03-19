@@ -80,7 +80,7 @@ struct sprdwl_vif {
 	u8 prwise_crypto;
 	u8 grp_crypto;
 	int ssid_len;
-	u8 ssid[IEEE80211_MAX_SSID_LEN + 1];
+	u8 ssid[IEEE80211_MAX_SSID_LEN];
 	u8 bssid[ETH_ALEN];
 	enum nl80211_cqm_rssi_threshold_event cqm;
 	u8 beacon_loss;

@@ -8,7 +8,7 @@ config BATTERY_SAMSUNG
 	 refer to sec_charging_common.h
 
 config BATTERY_SWELLING
-	bool "prevent battery swelling"
+	bool "prevent battery swellin "
 	help
 	  Say Y to include support for prevent battery swelling
 
@@ -21,12 +21,18 @@ config VBAT_CHECK
 	 Vendor PMIC or battery drivers
 	 should implement their own vbat_check_cb.
 
+config FORCE_FAST_CHARGE
+	bool "Force faster charge rate for AC/USB"
+	default n
+	help
+	  This allows users to override default charge rate for AC/USB
+
 config SAMSUNG_LPM_MODE
 	bool "Off charging mode support in sec battery driver"
 	default n
 	help
 	 Say Y to include support for sec off charging support
-	 This value defined at bootloader.
+	 This value defiend at bootloader.
 	 Before enable this feature,
 	 implement power off charging in the bootloader.
 
@@ -47,15 +53,6 @@ config STBC_SAMSUNG
 	 for fuelgauge driver with mfd.
 	 This driver source code implemented
 	 fuelgauge driver with mfd.
-
-config BATTERY_JXX_LTE
-	bool "JXX project LTE model feature"
-	default n
-	help
-	  Say Y to include support for JXX models.
-	  enable this feature only JXX models.
-	  This value defined for SM5701 charger
-	  and SPRD inner fuelgauge driver.
 
 # Fuel Gauge
 
@@ -375,15 +372,6 @@ config CHARGER_SM5414
 	 This driver source code implemented
 	 all functions for SMB5414 charger.
 
-config CHARGER_SM5418
-	tristate "SM5418 charger driver"
-	default n
-	help
-	 Say Y to include support
-	 for SM5418 charger driver.
-	 This driver source code implemented
-	 all functions for SMB5418 charger.
-
 # IF PMIC
 
 config CHARGER_MAX77693
@@ -432,6 +420,12 @@ config CHARGER_SPRD4SAMSUNG27X3
 	 for Summit sprd27X3 charger driver.
 	 This driver source code implemented
 	 all functions for sprd27X3 charger.
+
+config THUNDERCHARGE_CONTROL
+	bool "Enable ThunderCharge Current Controlling mechanism"
+	depends on BATTERY_SAMSUNG
+	help
+	 Say Y here to enable ability to adjust charger current
 
 config STORE_MODE
        bool "enable store mode"

@@ -1552,11 +1552,7 @@ static void wlan_sipc_event_rx_handler(struct sprdwl_priv *priv)
 	switch (event_id) {
 	case WIFI_EVENT_SCANDONE:
 		pr_debug("Recv sblock8 scan result event\n");
-		sprdwl_event_scan_results(priv, 0);
-		break;
-	case WIFI_EVENT_INTERNAL_BSS_INFO:
-		pr_debug("Recv sblock8 internal bss info event\n");
-		sprdwl_event_scan_results(priv, 1);
+		sprdwl_event_scan_results(priv, false);
 		break;
 	case WIFI_EVENT_CONNECT:
 		pr_debug("Recv sblock8 connect event\n");

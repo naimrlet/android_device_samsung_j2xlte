@@ -320,14 +320,12 @@ int mmc_init_queue(struct mmc_queue *mq, struct mmc_card *card,
  cleanup_queue:
 	kfree(mqrq_cur->sg);
 	mqrq_cur->sg = NULL;
-	if(!mmc_card_sd(card))
-		kfree(mqrq_cur->bounce_buf);
+	kfree(mqrq_cur->bounce_buf);
 	mqrq_cur->bounce_buf = NULL;
 
 	kfree(mqrq_prev->sg);
 	mqrq_prev->sg = NULL;
-	if(!mmc_card_sd(card))
-		kfree(mqrq_prev->bounce_buf);
+	kfree(mqrq_prev->bounce_buf);
 	mqrq_prev->bounce_buf = NULL;
 
 	blk_cleanup_queue(mq->queue);

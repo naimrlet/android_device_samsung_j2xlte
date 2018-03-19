@@ -30,15 +30,11 @@
 #define IMAGIS_IST3044C			(4) /* 3044C */
 #define IMAGIS_IST3048C			(5) /* 3048C */
 
-
-#if defined(CONFIG_MACH_SS_SHARKLT8) || defined(CONFIG_MACH_SS_SHARKLT8LIGHTSLEEP) || defined(CONFIG_MACH_J3XLTE) || defined(CONFIG_MACH_J2XLTE) || defined(CONFIG_MACH_J3XNLTE) || defined(CONFIG_MACH_SHARKLS_J3LTE)
-
+#ifdef CONFIG_MACH_SS_SHARKLT8
 #define IMAGIS_TSP_IC			IMAGIS_IST3038C
 #else
 #define IMAGIS_TSP_IC			IMAGIS_IST3032C
 #endif
-
-#define SHUTDOWN_TYPE 19
 
 #define TSP_CHIP_VENDOR			("IMAGIS")
 
@@ -100,7 +96,6 @@
 #define IST30XX_USE_KEY			(1)
 #define IST30XX_DEBUG			(1)
 #define IST30XX_CMCS_TEST		(1)
-#define IST30XX_CMCS_JIT_TEST		(1)
 #define IST30XX_GESTURE			(0)
 #define IST30XX_STATUS_DEBUG		(0)
 #if (IST30XX_DEBUG && IST30XX_CMCS_TEST)
@@ -108,6 +103,7 @@
 #else
 #define IST30XX_JIG_MODE			(0) // fixed
 #endif
+#define IST30XX_CHECK_BATT_TEMP (0)
 
 #define SEC_FACTORY_MODE		(1)
 /* IST30XX FUNCTION ENABLE & DISABLE */
@@ -118,9 +114,7 @@
 #define IST30XX_MAX_MT_FINGERS	(10)
 #define IST30XX_MAX_KEYS			(5)
 
-
-#if defined(CONFIG_MACH_SS_SHARKLT8) || defined(CONFIG_MACH_SS_SHARKLT8LIGHTSLEEP) || defined(CONFIG_MACH_J3XLTE) || defined(CONFIG_MACH_J2XLTE) || defined(CONFIG_MACH_J3XNLTE) || defined(CONFIG_MACH_SHARKLS_J3LTE)
-
+#ifdef CONFIG_MACH_SS_SHARKLT8
 #define IST30XX_MAX_X			(720) // LCD Resolution
 #define IST30XX_MAX_Y			(1280) // LCD Resolution
 #else
@@ -211,6 +205,7 @@
 #define IST30XX_HIB_TOUCH_STATUS	IST30XX_HA_ADDR(IST30XX_HIB_BASE | 0x00)
 #define IST30XX_HIB_INTR_MSG		IST30XX_HA_ADDR(IST30XX_HIB_BASE | 0x04)
 #define IST30XX_HIB_COORD		IST30XX_HA_ADDR(IST30XX_HIB_BASE | 0x08)
+#define IST30XX_HIB_BATT_TEMP	IST30XX_HA_ADDR(IST30XX_HIB_BASE | 0x38)
 #define IST30XX_HIB_CMD			IST30XX_HA_ADDR(IST30XX_HIB_BASE | 0x3C)
 #define IST30XX_HIB_RW_STATUS	IST30XX_HA_ADDR(IST30XX_HIB_BASE | 0x40)
 
@@ -377,8 +372,6 @@ struct ist30xx_platform_data {
 	int avdd_volt;
 	int chip_id;
 	int chip_code;
-	int tkey;
-	int octa_hw;
 	const char *chip_name;
 	const char *pwr_src;
 	struct regulator *avdd_regulator;
@@ -461,7 +454,6 @@ struct ist30xx_data {
 	volatile bool irq_working;
 	u32 irq_enabled;
 	bool initialized;
-	bool ignore_delay;
 	u32 noise_mode;
 	u32 debug_mode;
 #if IST30XX_JIG_MODE
@@ -505,6 +497,7 @@ int ist30xx_get_ver_info(struct ist30xx_data *data);
 
 int ist30xx_read_reg(struct i2c_client *client, u32 reg, u32 *buf);
 int ist30xx_read_cmd(struct ist30xx_data *data, u32 cmd, u32 *buf);
+int ist30xx_write_reg(struct i2c_client *client, u32 cmd, u32 val);
 int ist30xx_write_cmd(struct i2c_client *client, u32 cmd, u32 val);
 int ist30xx_read_buf(struct i2c_client *client, u32 cmd, u32 *buf, u16 len);
 int ist30xx_write_buf(struct i2c_client *client, u32 cmd, u32 *buf, u16 len);

@@ -37,9 +37,6 @@ struct lcd_panel_cabc_pwm_bl_data {
 	struct early_suspend early_suspend_desc;
 #endif
 };
-#if defined(CONFIG_FB_LCD_OLED_BACKLIGHT)
-extern int sprdfb_panel_update_brightness(struct backlight_device *bd);
-#endif
 
 struct brt_value{
 	int level;				// Platform setting values
@@ -148,11 +145,7 @@ static int lcd_panel_cabc_pwm_backlight_update_status(struct backlight_device *b
 		
 	BLDBG("[BACKLIGHT] lcd_panel_cabc_pwm_backlight_update_status ==> tune_level : %d\n", tune_level);
 	
-#if defined(CONFIG_FB_LCD_OLED_BACKLIGHT)
-        sprdfb_panel_update_brightness(bd); //OLED control
-#else
-        backlight_control(tune_level);
-#endif
+	backlight_control(tune_level);
 
 	current_intensity = tune_level;
 	
