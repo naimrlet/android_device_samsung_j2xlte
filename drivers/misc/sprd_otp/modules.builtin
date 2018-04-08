@@ -1,3 +1,0 @@
-kernel/drivers/misc/sprd_otp/efuse.ko
-kernel/drivers/misc/sprd_otp/ana_efuse.ko
-kernel/drivers/misc/sprd_otp/otp-bitmap.ko
