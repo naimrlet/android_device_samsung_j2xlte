@@ -180,6 +180,8 @@ source "drivers/sensor/Kconfig"
 
 source "drivers/iq/Kconfig"
 
+source "drivers/autotst/Kconfig"
+
 source "drivers/gator/Kconfig"
 
 source "drivers/cpuhotplug/Kconfig"

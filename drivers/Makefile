@@ -136,6 +136,11 @@ obj-$(CONFIG_VLYNQ)		+= vlynq/
 obj-$(CONFIG_STAGING)		+= staging/
 obj-y				+= platform/
 
+#need add autotst in whale later
+ifndef CONFIG_ARCH_WHALE
+obj-y	+= autotst/
+endif
+
 #common clk code
 obj-y				+= clk/
 

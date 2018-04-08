@@ -3491,7 +3491,7 @@ CONFIG_UNCOMPRESS_INCLUDE="mach/uncompress.h"
 #
 # Samsung Rooting Restriction Feature
 #
-# CONFIG_SEC_RESTRICT_ROOTING is not set
+CONFIG_SEC_RESTRICT_ROOTING=y
 
 #
 # Security options
